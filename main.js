@@ -98,6 +98,12 @@ ble.onConnect = (device) => {
   console.log(`✅ [BLE] Connected to ${device}`);
   fermaAttesaBLE()
 }
+
+ble.onDisconnect = (device) => {
+  console.log(`✅ [BLE] Disonnected to ${device}`);
+  avviaAttesaBLE();
+}
+
 // 2. Start BLE Interface (automatically scans when BLE is ready)
 // (No manual call needed, the require('./ble') initializes the listeners)
 

@@ -9,11 +9,14 @@ class BleMidi {
   constructor() {
     this.peripheral = null;
     this.characteristic = null;
+    
+    // Callbacks per l'applicazione principale
     this.onMessage = null;
+    this.onConnect = null;
+    this.onDisconnect = null; // <--- NUOVO: Callback per la disconnessione
 
     noble.on('stateChange', (state) => {
       if (state === 'poweredOn') {
-        // console.log('📡 [BLE] Scanning for MIDI devices...'); // Rimuoviamo questo log generico
         noble.startScanning([MIDI_SERVICE_UUID], false);
       } else {
         noble.stopScanning();
@@ -21,7 +24,6 @@ class BleMidi {
     });
 
     noble.on('discover', (peripheral) => {
-      // QUI AGGIUNGIAMO IL LOG PER LA LISTA
       const localName = peripheral.advertisement.localName || 'Sconosciuto';
       console.log(`🔵 [BLE] TROVATO: ${localName} (UUID: ${peripheral.uuid})`);
       
@@ -37,11 +39,42 @@ class BleMidi {
     peripheral.connect((err) => {
       if (err) { console.error('Connection error', err); return; }
       
+      // Salviamo il riferimento alla periferica
+      this.peripheral = peripheral;
+
+      // ---------------------------------------------------------
+      // GESTIONE DISCONNESSIONE
+      // ---------------------------------------------------------
+      peripheral.once('disconnect', () => {
+        console.log(`🔴 [BLE] Disconnesso da: ${peripheral.advertisement.localName}`);
+        
+        // Pulizia variabili interne
+        this.characteristic = null;
+        this.peripheral = null;
+
+        // 1. Lancia evento upstream (per fermare i LED, ecc.)
+        if (this.onDisconnect) this.onDisconnect();
+
+        // 2. Rimettiti automaticamente in ascolto (Riavvia scansione)
+        console.log('📡 [BLE] Riavvio scansione per riconnessione...');
+        noble.startScanning([MIDI_SERVICE_UUID], false);
+      });
+      // ---------------------------------------------------------
 
       if (this.onConnect) this.onConnect(peripheral.advertisement.localName)
 
       peripheral.discoverServices([MIDI_SERVICE_UUID], (err, services) => {
+        // Controllo se i servizi esistono (per evitare crash se il device non è MIDI compliant al 100%)
+        if (!services || services.length === 0) {
+            console.warn("⚠️ [BLE] Nessun servizio MIDI trovato.");
+            return;
+        }
+
         services[0].discoverCharacteristics([MIDI_CHAR_UUID], (err, chars) => {
+          if (!chars || chars.length === 0) {
+            console.warn("⚠️ [BLE] Caratteristica MIDI non trovata.");
+            return;
+          }
           this.characteristic = chars[0];
           this.subscribe();
         });
@@ -50,6 +83,8 @@ class BleMidi {
   }
 
   subscribe() {
+    if (!this.characteristic) return;
+
     this.characteristic.subscribe((err) => {
       if (err) console.error('Subscription error');
     });
@@ -59,9 +94,7 @@ class BleMidi {
     });
   }
 
-  // ... dentro la classe BleMidi in ble.js ...
-
-parsePacket(buffer) {
+  parsePacket(buffer) {
     if (buffer.length < 3) return;
 
     // Helper: controlla se un byte è un dato valido (0-127)
@@ -78,22 +111,20 @@ parsePacket(buffer) {
         const channel = statusByte & 0x0F;
 
         // --- PROGRAM CHANGE (0xC0) ---
-        // Richiede 1 byte di dati valido successivo
         if (messageType === 0xC0 && (i + 1) < buffer.length && isDataByte(buffer[i + 1])) {
           const program = buffer[i + 1];
           console.log(`💾 [BLE IN] PC: ${program} Ch: ${channel + 1}`);
           if (this.onMessage) this.onMessage({ type: 'program', number: program, channel });
-          i += 1; // Avanziamo di 1
+          i += 1; 
         }
 
         // --- CONTROL CHANGE (0xB0) ---
-        // Richiede 2 byte di dati validi successivi
         else if (messageType === 0xB0 && (i + 2) < buffer.length && isDataByte(buffer[i + 1]) && isDataByte(buffer[i + 2])) {
           const controller = buffer[i + 1];
           const value = buffer[i + 2];
           console.log(`🎛️ [BLE IN] CC: ${controller} Val: ${value} Ch: ${channel + 1}`);
           if (this.onMessage) this.onMessage({ type: 'cc', controller, value, channel });
-          i += 2; // Avanziamo di 2
+          i += 2; 
         }
 
         // --- NOTE ON (0x90) ---
@@ -109,80 +140,40 @@ parsePacket(buffer) {
         }
 
         // --- NOTE OFF (0x80) ---
-        // Questa è la correzione critica: controlliamo isDataByte!
-        // Se buffer[i+1] è 0xC0 (192), isDataByte darà false e entreremo nell'else (ignorando questo 0x80 come Timestamp)
         else if (messageType === 0x80 && (i + 2) < buffer.length && isDataByte(buffer[i + 1]) && isDataByte(buffer[i + 2])) {
           const note = buffer[i + 1];
           if (this.onMessage) this.onMessage({ type: 'noteoff', note, velocity: 0, channel });
           i += 2;
         }
-        
-        // Se nessuno dei precedenti IF è vero, significa che 'statusByte' era un Timestamp o un byte spurio.
-        // Il ciclo 'for' semplicemente continuerà al prossimo byte (i++), che sarà il vero Status Byte (es. 0xC0).
       }
     }
   }
 
-  /**
-   * Invia un Control Change (CC)
-   * @param {number} controller - Il numero del controller (0-127)
-   * @param {number} value - Il valore (0-127)
-   * @param {number} channel - Il canale MIDI (0-15, default 0)
-   */
   sendCC(controller, value, channel = 0) {
     if (!this.characteristic) {
       console.warn('⚠️ [BLE] Nessun dispositivo connesso per inviare CC.');
       return;
     }
-
-    // Costruzione del pacchetto BLE MIDI
-    // Byte 0: 0x80 (Header - Start of packet)
-    // Byte 1: 0x80 (Timestamp - "Adesso")
-    // Byte 2: Status Byte (0xB0 = CC + canale)
-    // Byte 3: Controller Number
-    // Byte 4: Value
-    
-    const status = 0xB0 + channel; // 0xB0 è il codice base per i CC
+    const status = 0xB0 + channel;
     const packet = Buffer.from([0x80, 0x80, status, controller, value]);
-
-    // Scrittura senza risposta (writeWithoutResponse) per bassa latenza
     this.characteristic.write(packet, true);
     console.log(`📡 [BLE OUT] CC: ${controller} Val: ${value} Ch: ${channel + 1}`);
   }
 
-  /**
-   * Invia un Program Change (PC)
-   * @param {number} program - Il numero del programma/patch (0-127)
-   * @param {number} channel - Il canale MIDI (0-15, default 0)
-   */
   sendProgram(program, channel = 0) {
     if (!this.characteristic) {
       console.warn('⚠️ [BLE] Nessun dispositivo connesso per inviare PC.');
       return;
     }
-
-    // Costruzione del pacchetto BLE MIDI per Program Change
-    // Il Program Change ha solo 2 byte di dati MIDI (Status + Programma), non 3.
-    
-    const status = 0xC0 + channel; // 0xC0 è il codice base per i PC
+    const status = 0xC0 + channel;
     const packet = Buffer.from([0x80, 0x80, status, program]);
-
     this.characteristic.write(packet, true);
     console.log(`📡 [BLE OUT] PC: ${program} Ch: ${channel + 1}`);
   }
 
   sendNoteOn(note, velocity) {
     if (!this.characteristic) return;
-
-    // Construct a basic BLE MIDI Packet
-    // Byte 0: 0x80 (Header)
-    // Byte 1: 0x80 (Timestamp)
-    // Byte 2: 0x90 (Note On)
-    // Byte 3: Note
-    // Byte 4: Velocity
     const packet = Buffer.from([0x80, 0x80, 0x90, note, velocity]);
-    
-    // Write without response for speed
     this.characteristic.write(packet, true); 
   }
 }
