@@ -36,7 +36,9 @@ class BleMidi {
 
     peripheral.connect((err) => {
       if (err) { console.error('Connection error', err); return; }
-      console.log(`✅ [BLE] Connected to ${peripheral.advertisement.localName}`);
+      
+
+      if (this.onConnect) this.onConnect(peripheral.advertisement.localName)
 
       peripheral.discoverServices([MIDI_SERVICE_UUID], (err, services) => {
         services[0].discoverCharacteristics([MIDI_CHAR_UUID], (err, chars) => {

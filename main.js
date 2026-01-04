@@ -22,6 +22,68 @@ function listDevices() {
   console.log('📡 [BLE] In attesa di advertisement Bluetooth...\n');
 }
 
+// Variabile globale per gestire il timer del lampeggio
+let intervalloLampeggio = null;
+
+/**
+ * Funzione da chiamare all'avvio dello script.
+ * Fa lampeggiare i LED finché non viene fermata.
+ */
+function avviaAttesaBLE() {
+    console.log("In attesa di BLE: avvio lampeggio...");
+    
+    // Stato iniziale
+    let acceso = false;
+
+    // Imposta un intervallo che scatta ogni 500ms
+    intervalloLampeggio = setInterval(() => {
+        acceso = !acceso; // Inverte lo stato (true -> false -> true...)
+        
+        // Chiama la tua funzione usb
+        if (usb && typeof usb.allLeds === 'function') {
+            usb.allLeds(acceso);
+        }
+    }, 500);
+}
+
+/**
+ * Funzione da chiamare DENTRO la callback di connessione BLE riuscita.
+ * Ferma il lampeggio e spegne (o accende fisso) i LED.
+ */
+function fermaAttesaBLE() {
+    if (intervalloLampeggio) {
+        clearInterval(intervalloLampeggio); // Stoppa il timer
+        intervalloLampeggio = null;
+        
+        console.log("BLE Connesso: stop lampeggio.");
+        
+        // Assicurati che alla fine i LED siano spenti (o true se preferisci accesi fissi)
+        if (usb && typeof usb.allLeds === 'function') {
+            usb.allLeds(false); 
+        }
+    }
+}
+
+// --- ESEMPIO DI UTILIZZO ---
+
+// 1. Alla partenza chiami:
+
+
+// 2. Simulazione della logica BLE (inserisci questo nel tuo evento 'connect')
+// noble.on('stateChange', ... scan ...)
+// noble.on('discover', ... connect ...)
+
+/* Esempio ipotetico di callback:
+   device.connect((error) => {
+       if (!error) {
+           // APPENA CONNESSO, FERMI IL LAMPEGGIO
+           fermaAttesaBLE();
+           
+           // Procedi con il resto...
+       }
+   });
+*/
+
 console.log('--- Node.js MIDI Bridge Started ---');
 
 // Esegui la lista all'avvio
@@ -30,6 +92,12 @@ console.log('--- Node.js MIDI Bridge Started ---');
 // ... il resto del tuo codice main.js (usb.start, routing, ecc.) ...
 usb.start('iCON G_Boar V1.03');
 
+avviaAttesaBLE();
+
+ble.onConnect = (device) => {
+  console.log(`✅ [BLE] Connected to ${device}`);
+  fermaAttesaBLE()
+}
 // 2. Start BLE Interface (automatically scans when BLE is ready)
 // (No manual call needed, the require('./ble') initializes the listeners)
 
@@ -153,7 +221,7 @@ usb.onMessage = (msg) => {
 ble.onMessage = (msg) => {
   if (msg.type == "cc" && msg.controller == 0) return
   if (msg.type == "program" ){
-    usb.allLights(false)
+    usb.allLeds(false)
   }
   console.log("ble", msg)
 };

@@ -32,7 +32,7 @@ class UsbMidi {
     // Open Output
     this.output = new easymidi.Output(foundOutput);
 
-    this.allLights(false)
+    this.allLeds(false)
 
     this.input.on('cc', (msg) => {
         if (this.onMessage) this.onMessage(msg);
@@ -54,7 +54,7 @@ class UsbMidi {
     this.output.send("noteon", { note: index, velocity: (this.leds[index] ? 127: 0), channel: 0});
   }
 
-  allLights(on) {
+  allLeds(on) {
     this.leds.forEach((led, index) => {
       led = on;
       this.leds[index] = on;
