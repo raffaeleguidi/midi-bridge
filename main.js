@@ -1,5 +1,5 @@
-const usb = require('./usb');
-const ble = require('./ble');
+const gboard = require('./gboard');
+const tonex = require('./tonexViaBLE');
 const easymidi = require('easymidi'); // Necessario qui per la lista USB
 
 // --- FUNZIONE DI ELENCO DISPOSITIVI ---
@@ -40,8 +40,8 @@ function avviaAttesaBLE() {
         acceso = !acceso; // Inverte lo stato (true -> false -> true...)
         
         // Chiama la tua funzione usb
-        if (usb && typeof usb.allLeds === 'function') {
-            usb.allLeds(acceso);
+        if (gboard && typeof gboard.allLeds === 'function') {
+            gboard.allLeds(acceso);
         }
     }, 500);
 }
@@ -58,8 +58,8 @@ function fermaAttesaBLE() {
         console.log("BLE Connesso: stop lampeggio.");
         
         // Assicurati che alla fine i LED siano spenti (o true se preferisci accesi fissi)
-        if (usb && typeof usb.allLeds === 'function') {
-            usb.allLeds(false); 
+        if (gboard && typeof gboard.allLeds === 'function') {
+            gboard.allLeds(false); 
         }
     }
 }
@@ -90,16 +90,16 @@ console.log('--- Node.js MIDI Bridge Started ---');
 // listDevices();
 
 // ... il resto del tuo codice main.js (usb.start, routing, ecc.) ...
-usb.start('iCON G_Boar V1.03');
+gboard.start('iCON G_Boar V1.03');
 
 avviaAttesaBLE();
 
-ble.onConnect = (device) => {
+tonex.onConnect = (device) => {
   console.log(`✅ [BLE] Connected to ${device}`);
   fermaAttesaBLE()
 }
 
-ble.onDisconnect = (device) => {
+tonex.onDisconnect = (device) => {
   console.log(`✅ [BLE] Disonnected to ${device}`);
   avviaAttesaBLE();
 }
@@ -143,50 +143,50 @@ function toggleGroup(index, status, min, max, usb, actionOn, actionOff) {
   }
 }
 
-usb.onSwitch = (index, status) => {
+gboard.onSwitch = (index, status) => {
   console.log("usb switch", index, status ? "on" : "off");
   if (index == 3) {
     // COMP/ POWER 18 000: OFF
     console.log("compressor", status ? "on" : "off");
-    ble.sendCC(18, status ? 127 : 0, 0);
+    tonex.sendCC(18, status ? 127 : 0, 0);
   }
   if (index == 2) {
     // tap tempo
     console.log("taptempo", status ? "on" : "off");
-    ble.sendCC(10, 0, 0);
-    usb.set(index, false)
+    tonex.sendCC(10, 0, 0);
+    gboard.set(index, false)
   }
 
 // ... dentro la callback usb ...
 
 // Gruppo MODULATION (Tasti 4-7)
-toggleGroup(index, status, 4, 7, usb,
+toggleGroup(index, status, 4, 7, gboard,
   // ACTION ON: Cosa fare quando attivi un effetto
   (idx) => {
     console.log(`MOD ${idx} -> ON type`, idx-3);
-    ble.sendCC(32, 127, 0);     // Power ON
-    ble.sendCC(33, idx - 3, 0); // Seleziona Tipo (4->1, 5->2...)
+    tonex.sendCC(32, 127, 0);     // Power ON
+    tonex.sendCC(33, idx - 3, 0); // Seleziona Tipo (4->1, 5->2...)
   },
   // ACTION OFF: Cosa fare quando disattivi lo stesso effetto premendolo di nuovo
   (idx) => {
     console.log(`MOD ${idx} -> OFF`);
-    ble.sendCC(32, 0, 0);       // Power OFF
+    tonex.sendCC(32, 0, 0);       // Power OFF
     // Non serve mandare il CC 33 (Type) quando spegni
   }
 );
 
 // Gruppo DELAY (Tasti 0-2)
-toggleGroup(index, status, 0, 1, usb,
+toggleGroup(index, status, 0, 1, gboard,
   // ACTION ON: Cosa fare quando attivi un effetto
   (idx) => {
     console.log(`DLY ${idx} -> ON type`, idx);
-    ble.sendCC(2, 127, 0);     // Power ON
-    ble.sendCC(3, idx, 0); // Seleziona Tipo (4->1, 5->2...)
+    tonex.sendCC(2, 127, 0);     // Power ON
+    tonex.sendCC(3, idx, 0); // Seleziona Tipo (4->1, 5->2...)
   },
   // ACTION OFF: Cosa fare quando disattivi lo stesso effetto premendolo di nuovo
   (idx) => {
     console.log(`DLY ${idx} -> OFF`);
-    ble.sendCC(2, 0, 0);       // Power OFF
+    tonex.sendCC(2, 0, 0);       // Power OFF
     // Non serve mandare il CC 33 (Type) quando spegni
   }
 );
@@ -219,15 +219,15 @@ toggleGroup(index, status, 0, 1, usb,
 // Route USB -> BLE
 }
 
-usb.onMessage = (msg) => {
+gboard.onMessage = (msg) => {
 
 };
 
 // Route BLE -> USB
-ble.onMessage = (msg) => {
+tonex.onMessage = (msg) => {
   if (msg.type == "cc" && msg.controller == 0) return
   if (msg.type == "program" ){
-    usb.allLeds(false)
+    gboard.allLeds(false)
   }
   console.log("ble", msg)
 };
