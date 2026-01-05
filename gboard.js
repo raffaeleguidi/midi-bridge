@@ -50,13 +50,8 @@ class GBoardUSBMidi {
 
     // --- SE NON TROVA IL DISPOSITIVO ---
     if (!foundInput || !foundOutput) {
-      console.warn(`⚠️ [USB] Dispositivo non trovato. Riprovo tra 1 secondo...`);
-      
-      // Riprova tra 5 secondi
-      this.retryTimer = setTimeout(() => {
-        this.start(deviceNameFilter);
-      }, 1000);
-      return; 
+      console.warn(`⚠️ [USB] Dispositivo non trovato Chiusura del programma`);
+      process.exit(1);
     }
 
     // --- SE LO TROVA ---

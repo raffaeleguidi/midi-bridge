@@ -64,27 +64,7 @@ function fermaAttesaBLE() {
     }
 }
 
-// --- ESEMPIO DI UTILIZZO ---
-
-// 1. Alla partenza chiami:
-
-
-// 2. Simulazione della logica BLE (inserisci questo nel tuo evento 'connect')
-// noble.on('stateChange', ... scan ...)
-// noble.on('discover', ... connect ...)
-
-/* Esempio ipotetico di callback:
-   device.connect((error) => {
-       if (!error) {
-           // APPENA CONNESSO, FERMI IL LAMPEGGIO
-           fermaAttesaBLE();
-           
-           // Procedi con il resto...
-       }
-   });
-*/
-
-console.log('--- Node.js MIDI Bridge Started ---');
+console.log('--- Tonex MIDI Bridge Started ---');
 
 // Esegui la lista all'avvio
 // listDevices();
