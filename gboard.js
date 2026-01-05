@@ -1,5 +1,6 @@
 const easymidi = require('easymidi');
 const EventEmitter = require('events');
+const fs = require('fs'); // Necessario per leggere lo stato su Linux
 
 class GBoardUSBMidi extends EventEmitter {
   constructor() {
@@ -7,7 +8,7 @@ class GBoardUSBMidi extends EventEmitter {
     
     // Configurazione
     this.targetDeviceName = 'iCON G_Boar V1.03';
-    this.checkInterval = 2000; // Controlla ogni 2 secondi
+    this.checkInterval = 3000; // Aumentiamo a 3 secondi per sicurezza
     
     // Stato interno
     this.input = null;
@@ -18,102 +19,134 @@ class GBoardUSBMidi extends EventEmitter {
     // Stato LED (cache)
     this.leds = [false, false, false, false, false, false, false, false];
     
-    // Callback esterna (per compatibilità col tuo main attuale)
+    // Callback esterna
     this.onMessage = null; 
   }
 
   // --- PUNTO DI INGRESSO ---
   start() {
-    console.log(`🕵️ [GBoard] Avvio Watchdog USB per: "${this.targetDeviceName}"`);
+    console.log(`🕵️ [GBoard] Avvio Watchdog USB (Linux Safe) per: "${this.targetDeviceName}"`);
     
-    // Eseguiamo subito un controllo
     this.checkConnection();
 
-    // Avviamo il loop infinito di controllo (Watchdog)
     this.watchdogTimer = setInterval(() => {
       this.checkConnection();
     }, this.checkInterval);
   }
 
-  // --- LOGICA CENTRALE DI CONTROLLO ---
+  // --- LOGICA CENTRALE DI CONTROLLO (OTTIMIZZATA) ---
   checkConnection() {
-    const inputs = easymidi.getInputs();
-    const outputs = easymidi.getOutputs();
+    try {
+        let isPhysicallyPresent = false;
 
-    // Cerchiamo se il dispositivo è fisicamente presente nel sistema
-    const foundInput = inputs.find(name => name.includes(this.targetDeviceName));
-    const foundOutput = outputs.find(name => name.includes(this.targetDeviceName));
-    const isPhysicallyPresent = foundInput && foundOutput;
+        // METODO 1: LINUX NATIVE (Leggerissimo, zero memory leak)
+        if (process.platform === 'linux') {
+            try {
+                // Leggiamo la lista delle schede audio registrate dal kernel
+                const cards = fs.readFileSync('/proc/asound/cards', 'utf8');
+                // Cerchiamo una parte univoca del nome (es. "iCON" o "V1.03")
+                // Nota: su Linux i nomi potrebbero apparire leggermente diversi, "iCON" è sicuro.
+                if (cards.includes("iCON") || cards.includes("G_Boar")) {
+                    isPhysicallyPresent = true;
+                }
+            } catch (fsErr) {
+                // Se fallisce la lettura file (es. permessi), fallback al metodo 2
+                console.warn("⚠️ Lettura /proc/asound/cards fallita, uso metodo MIDI standard.");
+                isPhysicallyPresent = this.checkViaMidiLib();
+            }
+        } 
+        // METODO 2: MAC/WINDOWS (O Fallback)
+        else {
+            isPhysicallyPresent = this.checkViaMidiLib();
+        }
 
-    // CASO 1: Dispositivo c'è ma noi non siamo connessi -> CONNETTI
-    if (isPhysicallyPresent && !this.isConnected) {
-      this.connect(foundInput, foundOutput);
+        // --- LOGICA DI CONNESSIONE ---
+        
+        // CASO 1: Dispositivo c'è ma noi non siamo connessi -> CONNETTI
+        if (isPhysicallyPresent && !this.isConnected) {
+            // Dobbiamo trovare i nomi esatti delle porte per connetterci
+            const inputs = easymidi.getInputs();
+            const outputs = easymidi.getOutputs();
+            
+            const foundInput = inputs.find(name => name.includes(this.targetDeviceName));
+            const foundOutput = outputs.find(name => name.includes(this.targetDeviceName));
+
+            if (foundInput && foundOutput) {
+                this.connect(foundInput, foundOutput);
+            }
+        }
+        
+        // CASO 2: Dispositivo non c'è più ma noi siamo connessi -> DISCONNETTI
+        else if (!isPhysicallyPresent && this.isConnected) {
+            console.warn("⚠️ [GBoard] Dispositivo perso fisicamente!");
+            this.disconnect();
+        }
+
+    } catch (criticalErr) {
+        // Questo catch impedisce al programma di crashare se ALSA dà errore "Cannot allocate memory"
+        console.error("⚠️ Errore Watchdog (ignorato):", criticalErr.message);
     }
-    
-    // CASO 2: Dispositivo non c'è più ma noi pensiamo di essere connessi -> DISCONNETTI
-    else if (!isPhysicallyPresent && this.isConnected) {
-      console.warn("⚠️ [GBoard] Dispositivo perso fisicamente!");
-      this.disconnect();
-    }
+  }
+
+  // Helper per il controllo standard (pesante per ALSA, ok per Mac)
+  checkViaMidiLib() {
+      const inputs = easymidi.getInputs();
+      const outputs = easymidi.getOutputs();
+      const hasIn = inputs.some(name => name.includes(this.targetDeviceName));
+      const hasOut = outputs.some(name => name.includes(this.targetDeviceName));
+      return hasIn && hasOut;
   }
 
   // --- GESTIONE CONNESSIONE ---
   connect(inputName, outputName) {
     try {
-      console.log(`🔌 [GBoard] Tentativo di connessione...`);
+      console.log(`🔌 [GBoard] Tentativo di connessione MIDI...`);
       
       this.input = new easymidi.Input(inputName);
       this.output = new easymidi.Output(outputName);
       this.isConnected = true;
 
-      // Setup Listeners
-      this.input.on('cc', (msg) => {
-        if (this.onMessage) this.onMessage(msg);
-      });
-
-      this.input.on('program', (msg) => {
-        if (this.onMessage) this.onMessage(msg);
-        this.switch(msg.number);
+      // Listeners
+      this.input.on('cc', (msg) => { if (this.onMessage) this.onMessage(msg); });
+      this.input.on('program', (msg) => { 
+          if (this.onMessage) this.onMessage(msg);
+          this.switch(msg.number);
       });
 
       // Reset iniziale
       this.allLeds(false);
 
       console.log(`✅ [GBoard] Connesso e pronto.`);
-      this.emit('connected'); // Avvisa il main.js
+      this.emit('connected'); 
 
     } catch (err) {
-      console.error(`❌ [GBoard] Errore in connessione: ${err.message}`);
-      this.disconnect(); // Pulisci subito in caso di fallimento parziale
+      console.error(`❌ [GBoard] Errore critico apertura porte: ${err.message}`);
+      this.disconnect(); 
     }
   }
 
   // --- GESTIONE DISCONNESSIONE E PULIZIA ---
   disconnect() {
-    if (!this.isConnected && !this.input && !this.output) return; // Già pulito
+    if (!this.isConnected && !this.input && !this.output) return; 
 
-    console.log("🧹 [GBoard] Chiusura porte e pulizia...");
+    console.log("🧹 [GBoard] Pulizia risorse ALSA...");
 
-    // Chiudiamo le porte C++ per evitare l'errore N-API
     if (this.input) {
-      try { this.input.close(); } catch (e) { console.error("Err close input:", e.message); }
+      try { this.input.close(); } catch (e) {}
       this.input = null;
     }
     
     if (this.output) {
-      try { this.output.close(); } catch (e) { console.error("Err close output:", e.message); }
+      try { this.output.close(); } catch (e) {}
       this.output = null;
     }
 
     this.isConnected = false;
-    this.emit('disconnected'); // Avvisa il main.js
+    this.emit('disconnected'); 
   }
 
-  // --- METODI OPERATIVI (PROTETTI) ---
-  
-  get(index) {
-    return this.leds[index];
-  }
+  // --- METODI OPERATIVI ---
+  get(index) { return this.leds[index]; }
 
   set(index, status) {
     if (!this.isConnected || !this.output) return;
@@ -121,9 +154,7 @@ class GBoardUSBMidi extends EventEmitter {
     try {
       this.output.send("noteon", { note: index, velocity: (status ? 127 : 0), channel: 0 });
     } catch (e) {
-      console.error("❌ Errore invio LED (set):", e.message);
-      // Se l'invio fallisce, è probabile che il device sia stato staccato.
-      // Il watchdog se ne accorgerà al prossimo giro, ma possiamo anticiparlo:
+      console.error("❌ Send Error (Set):", e.message);
       this.disconnect();
     }
   }
@@ -134,9 +165,7 @@ class GBoardUSBMidi extends EventEmitter {
       this.leds[index] = on;
       try {
         this.output.send("noteon", { note: index, velocity: (on ? 127 : 0), channel: 0 });
-      } catch (e) {
-        // Ignoriamo errori singoli qui, verranno catturati dal watchdog o dalla prossima set()
-      }
+      } catch (e) { /* silent fail per bulk ops */ }
     });
   }
 
@@ -147,22 +176,10 @@ class GBoardUSBMidi extends EventEmitter {
       this.output.send("noteon", { note: index, velocity: (this.leds[index] ? 127 : 0), channel: 0 });
       if (this.onSwitch) this.onSwitch(index, this.leds[index]);
     } catch (error) {
-      console.error("❌ Errore switch:", error.message);
+      console.error("❌ Switch Error:", error.message);
       this.disconnect();
-    }
-  }
-
-  send(type, msg) {
-    if (this.isConnected && this.output) {
-      try {
-        this.output.send(type, msg);
-      } catch (e) {
-        console.error("❌ Errore send:", e.message);
-        this.disconnect();
-      }
     }
   }
 }
 
-// Esportiamo un'istanza singola (Singleton)
 module.exports = new GBoardUSBMidi();
