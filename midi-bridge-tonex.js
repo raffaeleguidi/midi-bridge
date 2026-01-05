@@ -20,7 +20,7 @@ function saveLedState() {
         for(let i=0; i<8; i++) {
             ledStateBackup[i] = gboard.get(i);
         }
-        console.log("💾 [SYSTEM] Stato LED salvato:", ledStateBackup);
+        console.log("💾 [SYSTEM] Stato LED salvato");
     }
 }
 
