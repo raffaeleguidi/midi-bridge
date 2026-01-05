@@ -6,6 +6,8 @@ class UsbMidi {
     this.output = null;
     this.onMessage = null; // Callback for main.js
     this.leds = [false, false, false, false, false, false, false, false]
+// Nome esatto (o parte univoca del nome) del tuo dispositivo
+    this.targetDeviceName = 'iCON G_Boar V1.03';
   }
 
   
@@ -15,12 +17,14 @@ class UsbMidi {
     const inputs = easymidi.getInputs();
     const outputs = easymidi.getOutputs();
 
+    console.log(`🔍 [USB] Cerco il dispositivo: "${deviceNameFilter}"...`);
+
     // Find a device that matches the name (e.g., "Keystation") or pick the first one
-    const foundInput = inputs.find(name => name.includes(deviceNameFilter)) || inputs[0];
-    const foundOutput = outputs.find(name => name.includes(deviceNameFilter)) || outputs[0];
+    const foundInput = inputs.find(name => name.includes(deviceNameFilter));
+    const foundOutput = outputs.find(name => name.includes(deviceNameFilter));
 
     if (!foundInput) {
-      console.log('⚠️ [USB] No USB MIDI device found.');
+      console.log('⚠️ [USB] NoGBoard USB MIDI device found.');
       return;
     }
 

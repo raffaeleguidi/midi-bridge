@@ -17,7 +17,8 @@ class TonexViaBLE {
 
     noble.on('stateChange', (state) => {
       if (state === 'poweredOn') {
-        noble.startScanning([MIDI_SERVICE_UUID], false);
+        //noble.startScanning([MIDI_SERVICE_UUID], false);
+        noble.startScanning([], true);
       } else {
         noble.stopScanning();
       }
@@ -25,20 +26,27 @@ class TonexViaBLE {
 
     noble.on('discover', (peripheral) => {
       const localName = peripheral.advertisement.localName || 'Sconosciuto';
-      console.log(`🔵 [BLE] TROVATO: ${localName} (UUID: ${peripheral.uuid})`);
+      //console.log(`🔵 [BLE] TROVATO: ${localName} (UUID: ${peripheral.uuid})`);
+
+      const hasMidi = peripheral.advertisement.serviceUuids.includes(MIDI_SERVICE_UUID);
       
+      if (hasMidi || localName.includes('MidiPortA')) {
+        console.log(`🔵 [BLE] TROVATO: ${localName} (UUID: ${peripheral.uuid})`);
       // Procediamo alla connessione
-      this.connect(peripheral);
+        this.connect(peripheral);
+      }
     });
   }
 
-  connect(peripheral) {
+connect(peripheral) {
     console.log(`🔎 [BLE] Found device: ${peripheral.advertisement.localName}`);
     noble.stopScanning(); // Stop scanning to save resources
 
     peripheral.connect((err) => {
       if (err) { console.error('Connection error', err); return; }
       
+      console.log(`✅ [BLE] Connesso a ${peripheral.advertisement.localName}`);
+
       // Salviamo il riferimento alla periferica
       this.peripheral = peripheral;
 
@@ -52,36 +60,75 @@ class TonexViaBLE {
         this.characteristic = null;
         this.peripheral = null;
 
-        // 1. Lancia evento upstream (per fermare i LED, ecc.)
+        // 1. Lancia evento upstream
         if (this.onDisconnect) this.onDisconnect();
 
         // 2. Rimettiti automaticamente in ascolto (Riavvia scansione)
-        console.log('📡 [BLE] Riavvio scansione per riconnessione...');
-        noble.startScanning([MIDI_SERVICE_UUID], false);
+        console.log('📡 [BLE] Riavvio scansione (globale) per riconnessione...');
+        // NOTA: Usa [] anche qui se hai problemi di discovery, altrimenti rimetti [MIDI_SERVICE_UUID]
+        noble.startScanning([], true); 
       });
       // ---------------------------------------------------------
 
-      if (this.onConnect) this.onConnect(peripheral.advertisement.localName)
+      if (this.onConnect) this.onConnect(peripheral.advertisement.localName);
 
-      peripheral.discoverServices([MIDI_SERVICE_UUID], (err, services) => {
-        // Controllo se i servizi esistono (per evitare crash se il device non è MIDI compliant al 100%)
+      // MODIFICA: Chiediamo TUTTI i servizi ([]) invece di filtrare
+      peripheral.discoverServices([], (err, services) => {
+        if (err) { console.error('Service discovery error', err); return; }
+        
+        // Controllo robustezza
         if (!services || services.length === 0) {
-            console.warn("⚠️ [BLE] Nessun servizio MIDI trovato.");
+            console.warn("⚠️ [BLE] Nessun servizio trovato sul device.");
             return;
         }
 
-        services[0].discoverCharacteristics([MIDI_CHAR_UUID], (err, chars) => {
+        // DEBUG: Stampa cosa vede realmente il Raspberry
+        // console.log("Servizi visti:", services.map(s => s.uuid));
+
+        // CERCHIAMO IL SERVIZIO MIDI MANUALMENTE
+        // Normalizziamo l'UUID togliendo i trattini per un confronto sicuro
+        const targetUUID = MIDI_SERVICE_UUID.replace(/-/g, '').toLowerCase();
+        
+        const midiService = services.find(s => {
+            const currentUUID = s.uuid.replace(/-/g, '').toLowerCase();
+            return currentUUID === targetUUID;
+        });
+
+        if (!midiService) {
+            console.warn("⚠️ [BLE] Servizio MIDI non trovato nella lista servizi.");
+            return;
+        }
+
+        console.log("🎹 Servizio MIDI individuato, cerco caratteristiche...");
+
+        // MODIFICA: Chiediamo TUTTE le caratteristiche ([]) dentro il servizio MIDI
+        midiService.discoverCharacteristics([], (err, chars) => {
+          if (err) { console.error('Characteristic discovery error', err); return; }
           if (!chars || chars.length === 0) {
-            console.warn("⚠️ [BLE] Caratteristica MIDI non trovata.");
+            console.warn("⚠️ [BLE] Nessuna caratteristica trovata nel servizio MIDI.");
             return;
           }
-          this.characteristic = chars[0];
+
+          // CERCHIAMO LA CARATTERISTICA MIDI MANUALMENTE
+          const targetCharUUID = MIDI_CHAR_UUID.replace(/-/g, '').toLowerCase();
+
+          const midiChar = chars.find(c => {
+             const currentUUID = c.uuid.replace(/-/g, '').toLowerCase();
+             return currentUUID === targetCharUUID;
+          });
+
+          if (!midiChar) {
+             console.warn("⚠️ [BLE] Caratteristica I/O MIDI specifica non trovata.");
+             return;
+          }
+
+          console.log("✅ Caratteristica MIDI agganciata correttamente.");
+          this.characteristic = midiChar;
           this.subscribe();
         });
       });
     });
   }
-
   subscribe() {
     if (!this.characteristic) return;
 

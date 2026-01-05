@@ -19,7 +19,8 @@ console.log('📡 Scansione in corso per 5 secondi...');
 // 2. BLE
 noble.on('stateChange', (state) => {
   if (state === 'poweredOn') {
-    noble.startScanning([MIDI_SERVICE_UUID], false);
+    //noble.startScanning([MIDI_SERVICE_UUID], false);
+    noble.startScanning([], true);
     
     // Ferma tutto dopo 5 secondi
     setTimeout(() => {
