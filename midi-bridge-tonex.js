@@ -92,17 +92,21 @@ console.log('--- Node.js MIDI Bridge Started ---');
 // ... il resto del tuo codice main.js (usb.start, routing, ecc.) ...
 gboard.start('iCON G_Boar V1.03');
 
-avviaAttesaBLE();
-
-tonex.onConnect = (device) => {
-  console.log(`✅ [BLE] Connected to ${device}`);
-  fermaAttesaBLE()
-}
-
-tonex.onDisconnect = (device) => {
-  console.log(`✅ [BLE] Disonnected to ${device}`);
+gboard.onConnect = () => {
+  console.log("gboard connected")
   avviaAttesaBLE();
-}
+
+  tonex.onConnect = (device) => {
+    console.log(`✅ [BLE] Connected to ${device}`);
+    fermaAttesaBLE()
+  }
+
+  tonex.onDisconnect = (device) => {
+    console.log(`✅ [BLE] Disonnected to ${device}`);
+    avviaAttesaBLE();
+  }
+} 
+
 
 // 2. Start BLE Interface (automatically scans when BLE is ready)
 // (No manual call needed, the require('./ble') initializes the listeners)

@@ -28,6 +28,7 @@ class TonexViaBLE {
       const localName = peripheral.advertisement.localName || 'Sconosciuto';
       //console.log(`🔵 [BLE] TROVATO: ${localName} (UUID: ${peripheral.uuid})`);
 
+      if (!peripheral.advertisement.serviceUuids) return
       const hasMidi = peripheral.advertisement.serviceUuids.includes(MIDI_SERVICE_UUID);
       
       if (hasMidi || localName.includes('MidiPortA')) {
