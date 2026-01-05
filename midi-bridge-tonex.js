@@ -1,231 +1,157 @@
-const gboard = require('./gboard');
-const tonex = require('./tonexViaBLE');
-const easymidi = require('easymidi'); // Necessario qui per la lista USB
+const gboard = require('./gboard');       // Gestisce la pedaliera USB (con watchdog)
+const tonex = require('./tonexViaBLE');   // Gestisce il ToneX via Bluetooth (ex ble.js)
 
-// --- FUNZIONE DI ELENCO DISPOSITIVI ---
-function listDevices() {
-  console.log('\n🔍 --- SCANSIONE DISPOSITIVI MIDI ---');
+console.log('--- MIDI BRIDGE: G-Board <-> ToneX (BLE) ---');
 
-  // 1. ELENCO USB (Istantaneo)
-  const usbInputs = easymidi.getInputs();
-  const usbOutputs = easymidi.getOutputs();
-
-  if (usbInputs.length === 0 && usbOutputs.length === 0) {
-    console.log('❌ [USB] Nessun dispositivo trovato.');
-  } else {
-    usbInputs.forEach(name => console.log(`🔌 [USB] INPUT:  ${name}`));
-    usbOutputs.forEach(name => console.log(`🔌 [USB] OUTPUT: ${name}`));
-  }
-
-  // 2. ELENCO BLE (Asincrono - apparirà man mano che vengono trovati)
-  // Non possiamo "elencarli" tutti subito, dobbiamo aspettare che la scansione parta.
-  console.log('📡 [BLE] In attesa di advertisement Bluetooth...\n');
-}
-
-// Variabile globale per gestire il timer del lampeggio
-let intervalloLampeggio = null;
+// =============================================================================
+// 1. FUNZIONI UTILI (HELPER)
+// =============================================================================
 
 /**
- * Funzione da chiamare all'avvio dello script.
- * Fa lampeggiare i LED finché non viene fermata.
+ * Gestisce un gruppo di pulsanti con logica "Radio Toggle" (Esclusiva).
+ * - Pulisce gli altri LED del gruppo.
+ * - Esegue actionOn se il tasto viene attivato.
+ * - Esegue actionOff se il tasto viene disattivato.
  */
-function avviaAttesaBLE() {
-    console.log("In attesa di BLE: avvio lampeggio...");
-    
-    // Stato iniziale
-    let acceso = false;
-
-    // Imposta un intervallo che scatta ogni 500ms
-    intervalloLampeggio = setInterval(() => {
-        acceso = !acceso; // Inverte lo stato (true -> false -> true...)
-        
-        // Chiama la tua funzione usb
-        if (gboard && typeof gboard.allLeds === 'function') {
-            gboard.allLeds(acceso);
-        }
-    }, 500);
-}
-
-/**
- * Funzione da chiamare DENTRO la callback di connessione BLE riuscita.
- * Ferma il lampeggio e spegne (o accende fisso) i LED.
- */
-function fermaAttesaBLE() {
-    if (intervalloLampeggio) {
-        clearInterval(intervalloLampeggio); // Stoppa il timer
-        intervalloLampeggio = null;
-        
-        console.log("BLE Connesso: stop lampeggio.");
-        
-        // Assicurati che alla fine i LED siano spenti (o true se preferisci accesi fissi)
-        if (gboard && typeof gboard.allLeds === 'function') {
-            gboard.allLeds(false); 
-        }
-    }
-}
-
-console.log('--- Tonex MIDI Bridge Started ---');
-
-// Esegui la lista all'avvio
-// listDevices();
-
-// ... il resto del tuo codice main.js (usb.start, routing, ecc.) ...
-gboard.start('iCON G_Boar V1.03');
-
-gboard.onConnect = () => {
-  console.log("gboard connected")
-  avviaAttesaBLE();
-
-  tonex.onConnect = (device) => {
-    console.log(`✅ [BLE] Connected to ${device}`);
-    fermaAttesaBLE()
-  }
-
-  tonex.onDisconnect = (device) => {
-    console.log(`✅ [BLE] Disonnected to ${device}`);
-    avviaAttesaBLE();
-  }
-} 
-
-
-// 2. Start BLE Interface (automatically scans when BLE is ready)
-// (No manual call needed, the require('./ble') initializes the listeners)
-
-// --- ROUTING LOGIC ---
-
-/**
- * Gestisce un gruppo di pulsanti con logica "Radio Toggle".
- * Pulisce sempre gli altri LED. Esegue actionOn se acceso, actionOff se spento.
- * * @param {number} index - Indice del pulsante premuto
- * @param {boolean} status - Stato del pulsante (true=premuto/on, false=rilasciato/off)
- * @param {number} min - Inizio range gruppo
- * @param {number} max - Fine range gruppo
- * @param {object} usb - Oggetto usb per spegnere/accendere i LED
- * @param {function} actionOn - Callback se il tasto viene ACCESO (riceve index)
- * @param {function} actionOff - Callback se il tasto viene SPENTO (riceve index)
- */
-function toggleGroup(index, status, min, max, usb, actionOn, actionOff) {
-  // Se siamo fuori dal range, esci subito
+function toggleGroup(index, newStatus, min, max, usbDevice, actionOn, actionOff) {
+  // Se siamo fuori dal range, esci
   if (index < min || index > max) return;
 
   // 1. PULIZIA: Spegni SEMPRE tutti gli altri LED del gruppo
   for (let i = min; i <= max; i++) {
     if (i !== index) {
-      usb.set(i, false);
+      usbDevice.set(i, false);
     }
   }
 
   // 2. GESTIONE STATO CORRENTE
-  // Aggiorniamo il LED del tasto premuto in base allo status
-  usb.set(index, status);
+  // Aggiorniamo il LED del tasto premuto sulla pedaliera
+  usbDevice.set(index, newStatus);
 
-  // 3. ESECUZIONE CALLBACK
-  if (status) {
-    actionOn(index);
+  // 3. ESECUZIONE LOGICA MIDI VERSO TONEX
+  if (newStatus) {
+    if (actionOn) actionOn(index);
   } else {
-    actionOff(index);
+    if (actionOff) actionOff(index);
   }
 }
 
-gboard.onSwitch = (index, status) => {
-  console.log("usb switch", index, status ? "on" : "off");
-  if (index == 3) {
-    // COMP/ POWER 18 000: OFF
-    console.log("compressor", status ? "on" : "off");
-    tonex.sendCC(18, status ? 127 : 0, 0);
-  }
-  if (index == 2) {
-    // tap tempo
-    console.log("taptempo", status ? "on" : "off");
-    tonex.sendCC(10, 0, 0);
-    gboard.set(index, false)
-  }
 
-// ... dentro la callback usb ...
+// =============================================================================
+// 2. GESTIONE EVENTI G-BOARD (USB)
+// =============================================================================
 
-// Gruppo MODULATION (Tasti 4-7)
-toggleGroup(index, status, 4, 7, gboard,
-  // ACTION ON: Cosa fare quando attivi un effetto
-  (idx) => {
-    console.log(`MOD ${idx} -> ON type`, idx-3);
-    tonex.sendCC(32, 127, 0);     // Power ON
-    tonex.sendCC(33, idx - 3, 0); // Seleziona Tipo (4->1, 5->2...)
-  },
-  // ACTION OFF: Cosa fare quando disattivi lo stesso effetto premendolo di nuovo
-  (idx) => {
-    console.log(`MOD ${idx} -> OFF`);
-    tonex.sendCC(32, 0, 0);       // Power OFF
-    // Non serve mandare il CC 33 (Type) quando spegni
-  }
-);
+// EVENTO: Quando la G-Board viene connessa fisicamente (rilevata dal watchdog)
+gboard.on('connected', () => {
+    console.log("🎉 [MAIN] G-Board Rilevata! Inizializzazione...");
+    
+    // Piccolo gioco di luci all'avvio per confermare connessione
+    let i = 0;
+    const interval = setInterval(() => {
+        if (i > 0) gboard.set(i - 1, false);
+        if (i < 4) gboard.set(i, true);
+        i++;
+        if (i > 4) {
+            clearInterval(interval);
+            gboard.allLeds(false); // Spegni tutto alla fine
+            console.log("✅ [MAIN] Sistema Pronto. Premi un tasto.");
+        }
+    }, 100);
+});
 
-// Gruppo DELAY (Tasti 0-2)
-toggleGroup(index, status, 0, 1, gboard,
-  // ACTION ON: Cosa fare quando attivi un effetto
-  (idx) => {
-    console.log(`DLY ${idx} -> ON type`, idx);
-    tonex.sendCC(2, 127, 0);     // Power ON
-    tonex.sendCC(3, idx, 0); // Seleziona Tipo (4->1, 5->2...)
-  },
-  // ACTION OFF: Cosa fare quando disattivi lo stesso effetto premendolo di nuovo
-  (idx) => {
-    console.log(`DLY ${idx} -> OFF`);
-    tonex.sendCC(2, 0, 0);       // Power OFF
-    // Non serve mandare il CC 33 (Type) quando spegni
-  }
-);
+// EVENTO: Quando la G-Board viene scollegata o persa
+gboard.on('disconnected', () => {
+    console.log("⚠️ [MAIN] G-Board Scollegata. Il Watchdog sta cercando...");
+});
 
-  // if (index >= 4 && index <= 7) {
-  //   // MOD/ POWER 32 000: OFF 127: ON
-  //   for(var n=4;n<=7;n++){
-  //     if (index != n) {
-  //       console.log("n", n, false)
-  //       usb.set(n, false);
-  //     }
-  //   }
-  //   console.log("mod", index, status ? "on" : "off")
-  //   ble.sendCC(32, status ? 127 : 0, 0);          
-  //   // MOD/ TYPE 33 000: CHORUS - no
-  //           // 001: TREMOLO
-  //           // 002: PHASER
-  //           // 003: FLANGER
-  //           // 004: ROTARY
-  //   ble.sendCC(33, index -3, 0);     
-  // }
-// tonex cc
-// PRESET DOWN 86 Toggle
-// PRESET UP 87 Toggle
-
-// TUNER 9 Toggle
-
-// TAPTEMPO 10 Toggle
-
-// Route USB -> BLE
-}
-
+// EVENTO: Ricezione messaggi dalla pedaliera (USB -> BLE)
 gboard.onMessage = (msg) => {
+    // msg.number contiene l'indice del pulsante premuto (0-7)
+    // Se la tua GBoard è configurata per mandare Note invece di PC, usa msg.note
+    const index = msg.number; 
+    
+    // Calcoliamo il nuovo stato (invertendo quello attuale del LED)
+    const currentLedStatus = gboard.get(index);
+    const newStatus = !currentLedStatus;
 
+    console.log(`🎹 [USB IN] Tasto: ${index} | Nuovo Stato: ${newStatus ? 'ON' : 'OFF'}`);
+
+    // --- GRUPPO 1: PRESET (Tasti 0-3) ---
+    // Logica: "Radio Button Puro" (Uno attivo, gli altri spenti. Non si spegne se ripremuto).
+    if (index >= 0 && index <= 3) {
+        // Passiamo 'true' fisso perché un preset si attiva e basta
+        toggleGroup(index, true, 0, 3, gboard, 
+            (idx) => {
+                console.log(`➡️ [BLE OUT] Cambio Preset: ${idx}`);
+                tonex.sendProgram(idx, 0); 
+            },
+            null // Nessuna azione OFF per i preset
+        );
+    }
+
+    // --- GRUPPO 2: EFFETTI/MODULATION (Tasti 4-7) ---
+    // Logica: "Radio Toggle" (Uno attivo alla volta, ma si può spegnere ripremendo).
+    else if (index >= 4 && index <= 7) {
+        toggleGroup(index, newStatus, 4, 7, gboard,
+            (idx) => {
+                // ACTION ON: Attiva effetto
+                console.log(`➡️ [BLE OUT] Mod ON, Type: ${idx - 3}`);
+                tonex.sendCC(32, 127, 0);       // CC 32: Power ON
+                tonex.sendCC(33, idx - 3, 0);   // CC 33: Type (4->1, 5->2...)
+            },
+            (idx) => {
+                // ACTION OFF: Disattiva effetto
+                console.log(`➡️ [BLE OUT] Mod OFF`);
+                tonex.sendCC(32, 0, 0);         // CC 32: Power OFF
+            }
+        );
+    }
 };
 
-// Route BLE -> USB
+
+// =============================================================================
+// 3. GESTIONE EVENTI TONEX (BLE)
+// =============================================================================
+
+// Ricezione messaggi dal ToneX (BLE -> USB Feedback)
 tonex.onMessage = (msg) => {
-  if (msg.type == "cc" && msg.controller == 0) return
-  if (msg.type == "program" ){
-    gboard.allLeds(false)
-  }
-  console.log("ble", msg)
+    // Filtriamo i messaggi di Bank Select (CC 0 e 32) per pulire il log
+    if (msg.type === 'cc' && (msg.controller === 0 || msg.controller === 32)) {
+        return; 
+    }
+
+    console.log("⬅️ [BLE IN]", msg);
+
+    // FEEDBACK: Se cambi preset direttamente dal ToneX (manopola),
+    // aggiorniamo i LED della G-Board per riflettere la realtà.
+    if (msg.type === 'program') {
+        const preset = msg.number;
+        if (preset >= 0 && preset <= 3) {
+            console.log(`💡 [SYNC] ToneX ha cambiato preset a: ${preset}. Aggiorno LED.`);
+            // Aggiorna solo i LED, senza rieseguire la logica MIDI
+            for(let i=0; i<=3; i++) {
+                gboard.set(i, (i === preset));
+            }
+        }
+    }
 };
 
-// Keep the process alive
+// =============================================================================
+// 4. AVVIO
+// =============================================================================
+
+// Avvia il Watchdog USB della GBoard
+gboard.start();
+
+// Il modulo tonexViaBLE parte da solo (costruttore) appena importato.
+// Assicurati che nel costruttore di tonexViaBLE.js ci sia noble.startScanning().
+
+// Mantieni vivo il processo
 process.stdin.resume();
 
-
-// 🔍 --- SCANSIONE DISPOSITIVI MIDI ---
-// 🔌 [USB] INPUT:  SE49 MIDI1
-// 🔌 [USB] INPUT:  SE49 MIDI2
-// 🔌 [USB] INPUT:  iCON G_Boar V1.03
-// 🔌 [USB] INPUT:  Uscita virtuale GarageBand
-// 🔌 [USB] OUTPUT: SE49 MIDI1
-// 🔌 [USB] OUTPUT: iCON G_Boar V1.03
-// 🔌 [USB] OUTPUT: Ingresso virtuale GarageBand
-// 🔵 [BLE] TROVATO: MidiPortA (UUID: c333104b07f21a7ea9dbb99e126fa282)
+// Gestione chiusura pulita (CTRL+C)
+process.on('SIGINT', () => {
+    console.log('\n🛑 Chiusura applicazione...');
+    gboard.disconnect(); // Spegne i LED e chiude le porte USB
+    process.exit();
+});
