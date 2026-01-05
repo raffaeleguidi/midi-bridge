@@ -9,9 +9,19 @@ console.log('--- MIDI BRIDGE: G-Board <-> ToneX (BLE) ---');
 
 let isBleConnected = false;
 let blinkInterval = null;
+let ledStateBackup = [false, false, false, false, false, false, false, false]; // Backup dello stato
 
 function startBlinking() {
     if (blinkInterval) return; // Stiamo già lampeggiando
+    
+    // 1. SALVA LO STATO CORRENTE (BACKUP)
+    if (gboard.isConnected) {
+        for(let i=0; i<8; i++) {
+            ledStateBackup[i] = gboard.get(i);
+        }
+        console.log("💾 [SYSTEM] Stato LED salvato:", ledStateBackup);
+    }
+
     console.log("⏳ [SYSTEM] In attesa di BLE... Avvio lampeggio.");
     
     let state = false;
@@ -28,10 +38,15 @@ function stopBlinking() {
     if (blinkInterval) {
         clearInterval(blinkInterval);
         blinkInterval = null;
-        console.log("🔗 [SYSTEM] BLE Connesso. Stop lampeggio.");
-        // Resetta tutto a spento quando si ferma il blink
+        console.log("🔗 [SYSTEM] BLE Connesso. Stop lampeggio e ripristino.");
+        
+        // 2. RIPRISTINA LO STATO DAL BACKUP
         if (gboard.isConnected) {
-            gboard.allLeds(false);
+            // Invece di spegnere tutto, rimettiamo com'era prima
+            ledStateBackup.forEach((status, index) => {
+                gboard.set(index, status);
+            });
+            console.log("📂 [SYSTEM] Stato LED ripristinato.");
         }
     }
 }
@@ -129,8 +144,8 @@ gboard.on('connected', () => {
     if (!isBleConnected) {
         startBlinking();
     } else {
-        // Se il BLE c'era già, spegni tutto e siamo pronti
-        gboard.allLeds(false);
+        // Se il BLE c'è, ripristina lo stato salvato (utile se si ricollega l'USB mentre il BLE era attivo)
+        ledStateBackup.forEach((s, i) => gboard.set(i, s));
     }
 });
 
@@ -145,13 +160,13 @@ gboard.on('disconnected', () => {
 tonex.onConnect = (name) => {
     console.log(`✅ [BLE] Connesso a ${name}!`);
     isBleConnected = true;
-    stopBlinking(); // Connessione avvenuta: FERMA il lampeggio
+    stopBlinking(); // Connessione avvenuta: FERMA il lampeggio e ripristina
 };
 
 tonex.onDisconnect = () => {
     console.log("🔴 [BLE] Disconnesso.");
     isBleConnected = false;
-    startBlinking(); // Connessione persa: INIZIA a lampeggiare
+    startBlinking(); // Connessione persa: SALVA stato e INIZIA a lampeggiare
 };
 
 tonex.onMessage = (msg) => {
@@ -166,14 +181,14 @@ tonex.onMessage = (msg) => {
 // Avvia gestione USB
 gboard.start();
 
-// Avvia lampeggio preventivo (in attesa che il BLE si connetta la prima volta)
+// Avvia lampeggio preventivo (inizialmente lo stato salvato è tutto OFF)
 startBlinking();
 
 // Keep alive
 process.stdin.resume();
 process.on('SIGINT', () => {
     console.log('\n🛑 Chiusura...');
-    stopBlinking();
+    if (blinkInterval) clearInterval(blinkInterval);
     gboard.disconnect();
     process.exit();
 });
