@@ -2,6 +2,8 @@ const Gpio = require('onoff').Gpio;
 var shell = require('shelljs');
 
 console.log(new Date(), 'initializing gpio');
+
+/*
 if (shell.exec('raspi-gpio set 17 pu').code !== 0 ||       // Pin 17: Input, Pull Up (Resistenza interna attivata)
     shell.exec('raspi-gpio set 27 pu').code !== 0 ||       // Pin 27: Input, Pull Up
     shell.exec('raspi-gpio set 4  pu').code !== 0 ||       // Pin 4:  Input, Pull Up
@@ -9,12 +11,19 @@ if (shell.exec('raspi-gpio set 17 pu').code !== 0 ||       // Pin 17: Input, Pul
     shell.exec('raspi-gpio set 18 op pn dh').code !== 0) { // Pin 18: Output, Pull None (No resistenza), Drive High (Livello alto)
     console.error(new Date(), 'Error: init failed');
     shell.exit(1);
+}*/
+
+if (shell.exec('./init-pins.sh').code !== 0) {
+    console.error(new Date(), 'Error: init failed');
+    shell.exit(1);
 }
 
-const button1 = new Gpio(4, 'in', 'both', {debounceTimeout: 10});
-const button2 = new Gpio(27, 'in', 'both', {debounceTimeout: 10});
-const button3 = new Gpio(17, 'in', 'both', {debounceTimeout: 10});
-const button4 = new Gpio(22, 'in', 'both', {debounceTimeout: 10});
+console.log(new Date(), 'ready to go');
+
+const button1 = new Gpio(4, 'in', 'both', {debounceTimeout: 30});
+const button2 = new Gpio(27, 'in', 'both', {debounceTimeout: 30});
+const button3 = new Gpio(17, 'in', 'both', {debounceTimeout: 30});
+const button4 = new Gpio(22, 'in', 'both', {debounceTimeout: 30});
 
 
 var held = {
